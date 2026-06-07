@@ -8,6 +8,9 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/errno.h>
+
+extern char *strstr(const char *, const char *);
+extern size_t strlen(const char *);
 #include <linux/version.h>
 #include <linux/cred.h>
 #include <linux/dcache.h>
