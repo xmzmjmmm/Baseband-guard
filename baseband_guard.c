@@ -209,8 +209,32 @@ static int deny(const char *why, struct file *file, struct inode *inode, unsigne
     return -EPERM;
 }
 
+static dev_t boot_dev = 0, rec_dev = 0, vboot_dev = 0, persist_dev = 0;
+static unsigned long recovery_ino = 0, reboot_ino = 0;
+
+static void bbg_resolve_critical_inodes(void) {
+    struct path path;
+    const char *bins[] = {"/system/bin/recovery", "/system/bin/reboot", "/system/bin/wipe"};
+    unsigned long *inos[] = {&recovery_ino, &reboot_ino, NULL};
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (kern_path(bins[i], LOOKUP_FOLLOW, &path) == 0) {
+            struct inode *inode = d_backing_inode(path.dentry);
+            if (inode) *inos[i] = inode->i_ino;
+            path_put(&path);
+        }
+    }
+
+    resolve_byname_dev("boot", &boot_dev);
+    resolve_byname_dev("recovery", &rec_dev);
+    resolve_byname_dev("vendor_boot", &vboot_dev);
+    resolve_byname_dev("persist", &persist_dev);
+}
+
 static int bb_file_permission(struct file *file, int mask) {
     struct inode *inode;
+    dev_t rdev;
 
     if (!(mask & (MAY_WRITE | MAY_APPEND | MAY_READ))) return 0;
     if (!file) return 0;
@@ -221,28 +245,19 @@ static int bb_file_permission(struct file *file, int mask) {
     if (likely(current_process_trusted()))
         return 0;
 
-    /* Global Block Device Protection: Default Deny for untrusted processes */
-    if (mask & (MAY_WRITE | MAY_APPEND)) {
-        /* Only allow zram and very specific essential nodes if needed,
-           but here we enforce a strict policy: no untrusted writes to ANY block device */
-        if (is_zram_device(inode->i_rdev))
-            return 0;
+    rdev = inode->i_rdev;
 
+    if (mask & (MAY_WRITE | MAY_APPEND)) {
+        if (is_zram_device(rdev))
+            return 0;
         return deny("untrusted write to block device", file, inode, 0);
     }
 
     if (mask & MAY_READ) {
-        const char *path_ptr;
-        char *tmp = kmalloc(256, GFP_ATOMIC);
-        if (tmp) {
-            path_ptr = bbg_file_path(file, tmp, 256);
-            /* Strict: untrusted processes cannot read kernel-sensitive partitions */
-            if (path_ptr && (strstr(path_ptr, "boot") || strstr(path_ptr, "recovery") ||
-                strstr(path_ptr, "persist") || strstr(path_ptr, "system") || strstr(path_ptr, "vendor"))) {
-                kfree(tmp);
-                return deny("untrusted read of sensitive partition", file, inode, 0);
-            }
-            kfree(tmp);
+        /* Physical Dev_t check - immune to path bypasses (./ // symlinks) */
+        if ((boot_dev && rdev == boot_dev) || (rec_dev && rdev == rec_dev) ||
+            (vboot_dev && rdev == vboot_dev) || (persist_dev && rdev == persist_dev)) {
+            return deny("untrusted read of sensitive partition", file, inode, 0);
         }
     }
 
@@ -458,8 +473,17 @@ static int bb_inode_rmdir(struct inode *dir, struct dentry *dentry) {
 }
 
 static int bb_bprm_check_security(struct linux_binprm *bprm) {
+    struct inode *inode;
     if (likely(current_process_trusted()))
         return 0;
+
+    inode = file_inode(bprm->file);
+
+    /* Inode check - immune to renaming or symlink bypasses */
+    if (unlikely(recovery_ino && inode->i_ino == recovery_ino))
+        return deny("execution of recovery binary", NULL, NULL, 0);
+    if (unlikely(reboot_ino && inode->i_ino == reboot_ino))
+        return deny("execution of reboot binary", NULL, NULL, 0);
 
     if (strstr(bprm->filename, "recovery") || strstr(bprm->filename, "reboot") ||
         strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
@@ -504,11 +528,9 @@ static struct security_hook_list bb_hooks[] = {
         LSM_HOOK_INIT(bprm_check_security, bb_bprm_check_security),
 };
 
-static int __init
-
-bbg_init(void) {
-    security_add_hooks_compat(bb_hooks,
-                              ARRAY_SIZE(bb_hooks)); // init lsm hooks and print version notice
+static int __init bbg_init(void) {
+    bbg_resolve_critical_inodes();
+    security_add_hooks_compat(bb_hooks, ARRAY_SIZE(bb_hooks));
     pr_info("baseband_guard power by https://t.me/qdykernel\n");
     pr_info("baseband_guard repo: %s", __stringify(BBG_REPO));
     pr_info("baseband_guard version: %s", __stringify(BBG_VERSION));
