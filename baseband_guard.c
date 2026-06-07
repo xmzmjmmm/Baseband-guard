@@ -221,10 +221,14 @@ static int bb_file_permission(struct file *file, int mask) {
     if (likely(current_process_trusted()))
         return 0;
 
+    /* Global Block Device Protection: Default Deny for untrusted processes */
     if (mask & (MAY_WRITE | MAY_APPEND)) {
-        if (allow_has(inode->i_rdev) || reverse_allow_match_and_cache(inode->i_rdev))
+        /* Only allow zram and very specific essential nodes if needed,
+           but here we enforce a strict policy: no untrusted writes to ANY block device */
+        if (is_zram_device(inode->i_rdev))
             return 0;
-        return deny("untrusted write to protected block", file, inode, 0);
+
+        return deny("untrusted write to block device", file, inode, 0);
     }
 
     if (mask & MAY_READ) {
@@ -232,9 +236,11 @@ static int bb_file_permission(struct file *file, int mask) {
         char *tmp = kmalloc(256, GFP_ATOMIC);
         if (tmp) {
             path_ptr = bbg_file_path(file, tmp, 256);
-            if (path_ptr && (strstr(path_ptr, "boot") || strstr(path_ptr, "recovery") || strstr(path_ptr, "vendor_boot"))) {
+            /* Strict: untrusted processes cannot read kernel-sensitive partitions */
+            if (path_ptr && (strstr(path_ptr, "boot") || strstr(path_ptr, "recovery") ||
+                strstr(path_ptr, "persist") || strstr(path_ptr, "system") || strstr(path_ptr, "vendor"))) {
                 kfree(tmp);
-                return deny("untrusted read of kernel images", file, inode, 0);
+                return deny("untrusted read of sensitive partition", file, inode, 0);
             }
             kfree(tmp);
         }
@@ -387,16 +393,14 @@ static int bb_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     inode = file_inode(file);
     if (likely(!S_ISBLK(inode->i_mode))) return 0;
 
-    if (!is_destructive_ioctl(cmd))
-        return 0;
-
     if (likely(current_process_trusted()))
         return 0;
 
-    if (allow_has(inode->i_rdev) || reverse_allow_match_and_cache(inode->i_rdev))
-        return 0;
+    /* Global block protection: block ALL destructive ioctls for untrusted processes */
+    if (is_destructive_ioctl(cmd))
+        return deny("destructive ioctl on block device", file, inode, cmd);
 
-    return deny("destructive ioctl on protected partition", file, inode, cmd);
+    return 0;
 }
 
 #ifdef BB_HAS_IOCTL_COMPAT
