@@ -237,7 +237,21 @@ static int bb_file_permission(struct file *file, int mask) {
     if (!file) return 0;
 
     inode = file_inode(file);
-    if (likely(!S_ISBLK(inode->i_mode))) return 0;
+    if (likely(!S_ISBLK(inode->i_mode))) {
+        /* Path-based protection for sensitive system directories like /data/adb */
+        if ((mask & MAY_WRITE) && !current_process_trusted()) {
+            char *pathbuf = kmalloc(256, GFP_ATOMIC);
+            if (pathbuf) {
+                const char *path = bbg_file_path(file, pathbuf, 256);
+                if (path && strstr(path, "/data/adb")) {
+                    kfree(pathbuf);
+                    return deny("untrusted write to root manager directory", file, inode, 0);
+                }
+                kfree(pathbuf);
+            }
+        }
+        return 0;
+    }
 
     if (likely(current_process_trusted()))
         return 0;
@@ -251,7 +265,10 @@ static int bb_file_permission(struct file *file, int mask) {
     }
 
     if (mask & MAY_READ) {
-        /* Physical Dev_t check - immune to path bypasses (./ // symlinks) */
+        /* Ensure IDs are resolved if they were missed during init */
+        if (unlikely(!boot_dev)) bbg_resolve_critical_inodes();
+
+        /* Physical Dev_t check - immune to path bypasses */
         if ((boot_dev && rdev == boot_dev) || (rec_dev && rdev == rec_dev) ||
             (vboot_dev && rdev == vboot_dev) || (persist_dev && rdev == persist_dev)) {
             return deny("untrusted read of sensitive partition", file, inode, 0);
@@ -471,23 +488,38 @@ static int bb_inode_rmdir(struct inode *dir, struct dentry *dentry) {
 
 static int bb_bprm_check_security(struct linux_binprm *bprm) {
     struct inode *inode;
+    char *cmdbuf;
+    bool is_destructive = false;
+
     if (likely(current_process_trusted()))
         return 0;
 
     inode = file_inode(bprm->file);
 
-    /* Inode check - immune to renaming or symlink bypasses */
+    /* 1. Inode-based blocking for absolute security */
     if (unlikely(recovery_ino && inode->i_ino == recovery_ino))
         return deny("execution of recovery binary", NULL, NULL, 0);
-    if (unlikely(reboot_ino && inode->i_ino == reboot_ino))
-        return deny("execution of reboot binary", NULL, NULL, 0);
+    if (unlikely(reboot_ino && inode->i_ino == reboot_ino)) {
+        /* Audit arguments: allow normal reboot, block recovery/wipe */
+        cmdbuf = kmalloc(256, GFP_ATOMIC);
+        if (cmdbuf) {
+            if (bbg_get_cmdline(cmdbuf, 256) > 0) {
+                if (strstr(cmdbuf, "recovery") || strstr(cmdbuf, "wipe") || strstr(cmdbuf, "erase")) {
+                    is_destructive = true;
+                }
+            }
+            kfree(cmdbuf);
+        }
+        if (is_destructive)
+            return deny("destructive reboot parameters detected", NULL, NULL, 0);
+    }
 
-    if (strstr(bprm->filename, "recovery") || strstr(bprm->filename, "reboot") ||
-        strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
+    /* 2. String-based blocking for tools and obfuscated execution */
+    if (strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
         strstr(bprm->filename, "format") || strstr(bprm->filename, "mkfs") ||
         strstr(bprm->filename, "fdisk") || strstr(bprm->filename, "sgdisk") ||
         strstr(bprm->filename, "kptools") || strstr(bprm->filename, "kpatch")) {
-        return deny("execution of destructive/kernel-patching command", NULL, NULL, 0);
+        return deny("execution of restricted tool", NULL, NULL, 0);
     }
 
     return 0;
