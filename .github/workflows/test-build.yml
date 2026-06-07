@@ -60,6 +60,9 @@ jobs:
 
     name: Build Check - ${{ matrix.kernel_config.android_version }} (Kernel ${{ matrix.kernel_config.kernel_version }})
     
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
       - name: Clean up build environment
         run: |
@@ -91,7 +94,7 @@ jobs:
           mkdir -p "$CONFIG"
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1
+        uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: gki-kernel-${{ env.CONFIG }}
           max-size: 3G
