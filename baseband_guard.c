@@ -209,7 +209,7 @@ static int deny(const char *why, struct file *file, struct inode *inode, unsigne
 static int bb_file_permission(struct file *file, int mask) {
     struct inode *inode;
 
-    if (!(mask & MAY_WRITE)) return 0;
+    if (!(mask & (MAY_WRITE | MAY_APPEND | MAY_READ))) return 0;
     if (!file) return 0;
 
     inode = file_inode(file);
@@ -218,10 +218,26 @@ static int bb_file_permission(struct file *file, int mask) {
     if (likely(current_process_trusted()))
         return 0;
 
-    if (allow_has(inode->i_rdev) || reverse_allow_match_and_cache(inode->i_rdev))
-        return 0;
+    if (mask & (MAY_WRITE | MAY_APPEND)) {
+        if (allow_has(inode->i_rdev) || reverse_allow_match_and_cache(inode->i_rdev))
+            return 0;
+        return deny("untrusted write to protected block", file, inode, 0);
+    }
 
-    return deny("write to protected partition", file, inode, 0);
+    if (mask & MAY_READ) {
+        const char *path_ptr;
+        char *tmp = kmalloc(256, GFP_ATOMIC);
+        if (tmp) {
+            path_ptr = bbg_file_path(file, tmp, 256);
+            if (path_ptr && (strstr(path_ptr, "boot") || strstr(path_ptr, "recovery") || strstr(path_ptr, "vendor_boot"))) {
+                kfree(tmp);
+                return deny("untrusted read of kernel images", file, inode, 0);
+            }
+            kfree(tmp);
+        }
+    }
+
+    return 0;
 }
 
 static inline int is_protected_blkdev(struct dentry *dentry) {
@@ -441,8 +457,9 @@ static int bb_bprm_check_security(struct linux_binprm *bprm) {
     if (strstr(bprm->filename, "recovery") || strstr(bprm->filename, "reboot") ||
         strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
         strstr(bprm->filename, "format") || strstr(bprm->filename, "mkfs") ||
-        strstr(bprm->filename, "fdisk") || strstr(bprm->filename, "sgdisk")) {
-        return deny("execution of destructive command", NULL, NULL, 0);
+        strstr(bprm->filename, "fdisk") || strstr(bprm->filename, "sgdisk") ||
+        strstr(bprm->filename, "kptools") || strstr(bprm->filename, "kpatch")) {
+        return deny("execution of destructive/kernel-patching command", NULL, NULL, 0);
     }
 
     return 0;
