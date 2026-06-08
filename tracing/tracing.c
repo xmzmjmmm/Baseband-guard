@@ -34,6 +34,7 @@ void bb_cred_transfer(struct cred *new, const struct cred *old) {
 int bb_bprm_set_creds(struct linux_binprm *bprm) {
     static int su_sid = -1;
     static int magisk_sid = -1;
+    static int ksu_sid = -1;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
     struct task_security_struct *new_selinux_tsec;
     const struct task_security_struct *old_selinux_tsec;
@@ -56,9 +57,9 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
     }
 
     if (unlikely(!selinux_initialized_compat()))
-        return 0; // we keep this only for module scripts, i don't want hook execve
+        return 0;
 
-    if (su_sid == -1) { // root impl compatible
+    if (su_sid == -1) {
         if (security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &su_sid)) {
             su_sid = -EINVAL;
         }
@@ -70,13 +71,21 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
         }
     }
 
+    if (ksu_sid == -1) {
+        if (security_secctx_to_secid("u:r:ksu:s0", strlen("u:r:ksu:s0"), &ksu_sid) != 0) {
+            ksu_sid = -EINVAL;
+        }
+    }
+
     if (unlikely(
-            old_selinux_tsec->sid == su_sid || old_selinux_tsec->osid == su_sid || // kernelsu
+            old_selinux_tsec->sid == su_sid || old_selinux_tsec->osid == su_sid ||
             new_selinux_tsec->sid == su_sid || new_selinux_tsec->osid == su_sid ||
 
             old_selinux_tsec->sid == magisk_sid || old_selinux_tsec->osid == magisk_sid ||
-            // magisk/apatch
-            new_selinux_tsec->sid == magisk_sid || new_selinux_tsec->osid == magisk_sid
+            new_selinux_tsec->sid == magisk_sid || new_selinux_tsec->osid == magisk_sid ||
+
+            old_selinux_tsec->sid == ksu_sid || old_selinux_tsec->osid == ksu_sid ||
+            new_selinux_tsec->sid == ksu_sid || new_selinux_tsec->osid == ksu_sid
     )) {
         new_bbg_tsec->is_untrusted_process = 1;
         pr_info("baseband_guard: pid %d has been marked as untrusted process due to its selinux domain\n",
