@@ -3,6 +3,7 @@
 
 #include <linux/cred.h>
 #include <linux/security.h>
+#include <linux/version.h>
 
 struct bbg_cred_security_struct {
     unsigned is_untrusted_process: 1;    /* execve from su */
@@ -13,7 +14,8 @@ extern struct lsm_blob_sizes bbg_blob_sizes;
 
 static __maybe_unused inline struct bbg_cred_security_struct* bbg_cred(const struct cred *cred) {
     if (unlikely(!cred || !cred->security)) return NULL;
-    return cred->security + bbg_blob_sizes.lbs_cred;
+    /* Explicit cast for safer pointer arithmetic across different compilers */
+    return (struct bbg_cred_security_struct *)((char *)cred->security + bbg_blob_sizes.lbs_cred);
 }
 
 #else
@@ -35,4 +37,4 @@ static __maybe_unused inline int current_process_trusted(void) {
     return !bbg_tsec->is_untrusted_process;
 }
 
-#endif
+#endif /* _BBG_TRACING_H_ */

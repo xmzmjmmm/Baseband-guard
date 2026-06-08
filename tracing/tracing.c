@@ -1,8 +1,10 @@
-#include "kernel_compat.h"
 #include <linux/security.h>
 #include <linux/errno.h>
 #include <linux/cred.h>
 #include <linux/slab.h>
+#include <linux/version.h>
+
+#include "kernel_compat.h"
 #include "tracing.h"
 
 #ifdef BBG_USE_DEFINE_LSM
@@ -46,11 +48,12 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
         return 0; // already flag as untrusted_process
     }
 
-    /* Use public LSM API to get the secid/sid without internal headers */
+    /* Standard public API to get SID */
     security_cred_getsecid(current_cred(), &old_sid);
     security_cred_getsecid(bprm->cred, &new_sid);
 
-    if (unlikely(!selinux_initialized_compat()))
+    /* Use our robust public-API based check */
+    if (unlikely(!bbg_lsm_initialized()))
         return 0;
 
     /* 1. Universal Elevation Check: If a non-root process becomes root via execve */
@@ -94,12 +97,8 @@ int __maybe_unused bbg_test_domain_transition(u32 target_secid) {
 #ifndef BBG_USE_DEFINE_LSM
 
 struct bbg_cred_security_struct *bbg_cred(const struct cred *cred) {
-    /*
-     * In non-stacking environments where BBG is manually integrated,
-     * we expect our blob to be directly accessible or manually handled.
-     * This fallback assumes cred->security points to our structure if not stacking.
-     */
     if (!cred || !cred->security) return NULL;
+    /* Manual integration fallback */
     return (struct bbg_cred_security_struct *)cred->security;
 }
 
