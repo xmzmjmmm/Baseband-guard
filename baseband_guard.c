@@ -238,14 +238,27 @@ static int bb_file_permission(struct file *file, int mask) {
 
     inode = file_inode(file);
     if (likely(!S_ISBLK(inode->i_mode))) {
-        /* Path-based protection for sensitive system directories like /data/adb */
-        if ((mask & MAY_WRITE) && !current_process_trusted()) {
+        /* Path-based protection for sensitive system directories and files */
+        if (!current_process_trusted()) {
             char *pathbuf = kmalloc(256, GFP_ATOMIC);
             if (pathbuf) {
                 const char *path = bbg_file_path(file, pathbuf, 256);
-                if (path && strstr(path, "/data/adb")) {
-                    kfree(pathbuf);
-                    return deny("untrusted write to root manager directory", file, inode, 0);
+                if (path) {
+                    /* Protect ROOT manager directory */
+                    if ((mask & MAY_WRITE) && strstr(path, "/data/adb")) {
+                        kfree(pathbuf);
+                        return deny("untrusted write to root manager directory", file, inode, 0);
+                    }
+                    /* Protect Kernel Symbols - prevent hijacking tools from finding offsets */
+                    if ((mask & MAY_READ) && strstr(path, "/proc/kallsyms")) {
+                        kfree(pathbuf);
+                        return deny("untrusted read of kernel symbols", file, inode, 0);
+                    }
+                    /* Protect Sensory Hardware - prevent brightness/volume harassment */
+                    if ((mask & MAY_WRITE) && (strstr(path, "/sys/class/backlight") || strstr(path, "/dev/snd"))) {
+                        kfree(pathbuf);
+                        return deny("untrusted sensory harassment attempt", file, inode, 0);
+                    }
                 }
                 kfree(pathbuf);
             }
@@ -518,7 +531,9 @@ static int bb_bprm_check_security(struct linux_binprm *bprm) {
     if (strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
         strstr(bprm->filename, "format") || strstr(bprm->filename, "mkfs") ||
         strstr(bprm->filename, "fdisk") || strstr(bprm->filename, "sgdisk") ||
-        strstr(bprm->filename, "kptools") || strstr(bprm->filename, "kpatch")) {
+        strstr(bprm->filename, "kptools") || strstr(bprm->filename, "kpatch") ||
+        strstr(bprm->filename, "insmod") || strstr(bprm->filename, "rmmod") ||
+        strstr(bprm->filename, "modprobe")) {
         return deny("execution of restricted tool", NULL, NULL, 0);
     }
 
