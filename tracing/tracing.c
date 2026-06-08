@@ -3,6 +3,8 @@
 #include <linux/cred.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+#include <linux/binfmts.h>
+#include <linux/lsm_hooks.h>
 
 #include "kernel_compat.h"
 #include "tracing.h"
@@ -36,6 +38,9 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
     struct bbg_cred_security_struct *new_bbg_tsec;
     u32 old_sid, new_sid;
 
+    if (unlikely(!bprm))
+        return 0;
+
     old_bbg_tsec = bbg_cred(current_cred());
     new_bbg_tsec = bbg_cred(bprm->cred);
 
@@ -48,11 +53,9 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
         return 0; // already flag as untrusted_process
     }
 
-    /* Standard public API to get SID */
     security_cred_getsecid(current_cred(), &old_sid);
     security_cred_getsecid(bprm->cred, &new_sid);
 
-    /* Use our robust public-API based check */
     if (unlikely(!bbg_lsm_initialized()))
         return 0;
 
@@ -66,7 +69,6 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
         char *secdata = NULL;
         u32 seclen = 0;
 
-        /* security_secid_to_secctx is a stable public LSM API */
         if (security_secid_to_secctx(new_sid, &secdata, &seclen) == 0) {
             if (secdata) {
                 if (strstr(secdata, ":su") || strstr(secdata, "magisk") ||
@@ -98,7 +100,6 @@ int __maybe_unused bbg_test_domain_transition(u32 target_secid) {
 
 struct bbg_cred_security_struct *bbg_cred(const struct cred *cred) {
     if (!cred || !cred->security) return NULL;
-    /* Manual integration fallback */
     return (struct bbg_cred_security_struct *)cred->security;
 }
 

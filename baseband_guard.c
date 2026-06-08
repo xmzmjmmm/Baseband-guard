@@ -15,6 +15,7 @@
 #include <linux/printk.h>
 #include <linux/ratelimit.h>
 #include <linux/dcache.h>
+#include <linux/lsm_hooks.h>
 
 #include "kernel_compat.h"
 #include "baseband_guard.h"
