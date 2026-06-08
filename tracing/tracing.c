@@ -5,22 +5,10 @@
 #include <linux/slab.h>
 #include "tracing.h"
 
-/* SELinux internal headers are provided by Makefile include paths */
-#include "objsec.h"
-
 #ifdef BBG_USE_DEFINE_LSM
 struct lsm_blob_sizes bbg_blob_sizes __ro_after_init = {
     .lbs_cred = sizeof(struct bbg_cred_security_struct),
 };
-#endif
-
-/* Standard SELinux cred accessor usually provided by objsec.h */
-#ifndef selinux_cred
-static inline struct task_security_struct *bbg_selinux_cred(const struct cred *cred) {
-    if (!cred) return NULL;
-    return cred->security;
-}
-#define selinux_cred bbg_selinux_cred
 #endif
 
 int bb_cred_prepare(struct cred *new, const struct cred *old,
@@ -42,15 +30,9 @@ void bb_cred_transfer(struct cred *new, const struct cred *old) {
 }
 
 int bb_bprm_set_creds(struct linux_binprm *bprm) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
-    struct task_security_struct *new_selinux_tsec;
-    const struct task_security_struct *old_selinux_tsec;
-#else
-    struct cred_security_struct *new_selinux_tsec;
-    const struct cred_security_struct *old_selinux_tsec;
-#endif
     const struct bbg_cred_security_struct *old_bbg_tsec;
     struct bbg_cred_security_struct *new_bbg_tsec;
+    u32 old_sid, new_sid;
 
     old_bbg_tsec = bbg_cred(current_cred());
     new_bbg_tsec = bbg_cred(bprm->cred);
@@ -64,13 +46,11 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
         return 0; // already flag as untrusted_process
     }
 
+    /* Use public LSM API to get the secid/sid without internal headers */
+    security_cred_getsecid(current_cred(), &old_sid);
+    security_cred_getsecid(bprm->cred, &new_sid);
+
     if (unlikely(!selinux_initialized_compat()))
-        return 0;
-
-    old_selinux_tsec = selinux_cred(current_cred());
-    new_selinux_tsec = selinux_cred(bprm->cred);
-
-    if (unlikely(!old_selinux_tsec || !new_selinux_tsec))
         return 0;
 
     /* 1. Universal Elevation Check: If a non-root process becomes root via execve */
@@ -82,7 +62,9 @@ int bb_bprm_set_creds(struct linux_binprm *bprm) {
     if (!new_bbg_tsec->is_untrusted_process) {
         char *secdata = NULL;
         u32 seclen = 0;
-        if (security_secid_to_secctx(new_selinux_tsec->sid, &secdata, &seclen) == 0) {
+
+        /* security_secid_to_secctx is a stable public LSM API */
+        if (security_secid_to_secctx(new_sid, &secdata, &seclen) == 0) {
             if (secdata) {
                 if (strstr(secdata, ":su") || strstr(secdata, "magisk") ||
                     strstr(secdata, "ksu") || strstr(secdata, "apatch")) {
@@ -112,8 +94,13 @@ int __maybe_unused bbg_test_domain_transition(u32 target_secid) {
 #ifndef BBG_USE_DEFINE_LSM
 
 struct bbg_cred_security_struct *bbg_cred(const struct cred *cred) {
+    /*
+     * In non-stacking environments where BBG is manually integrated,
+     * we expect our blob to be directly accessible or manually handled.
+     * This fallback assumes cred->security points to our structure if not stacking.
+     */
     if (!cred || !cred->security) return NULL;
-    return &((struct task_security_struct *) cred->security)->bbg_cred;
+    return (struct bbg_cred_security_struct *)cred->security;
 }
 
 #endif

@@ -20,9 +20,6 @@
 #include "baseband_guard.h"
 #include "tracing/tracing.h"
 
-/* get_cmdline is often not exported, but available in many Android kernels */
-extern int get_cmdline(struct task_struct *task, char *buffer, int buflen);
-
 /* -------------------------------------------------------------------------
  * 1. Global Identity Cache (Pre-resolved for Atomic Performance)
  * ------------------------------------------------------------------------- */
@@ -87,17 +84,6 @@ static void bbg_resolve_identities(void) {
     }
 }
 
-static int bbg_get_cmdline(char *buf, int buflen) {
-    int n, i;
-    if (!buf || buflen <= 0) return 0;
-    n = get_cmdline(current, buf, buflen);
-    if (n <= 0) return 0;
-    for (i = 0; i < n - 1; i++) if (buf[i] == '\0') buf[i] = ' ';
-    if (n < buflen) buf[n] = '\0';
-    else buf[buflen - 1] = '\0';
-    return n;
-}
-
 static int deny(const char *why, struct file *file, struct inode *inode, unsigned int cmd_opt) {
     bb_pr_rl("baseband_guard: deny %s (pid=%d, comm=%s)\n", why, current->pid, current->comm);
     return -EPERM;
@@ -140,8 +126,6 @@ static int bb_file_permission(struct file *file, int mask) {
 
 static int bb_bprm_check_security(struct linux_binprm *bprm) {
     struct inode *inode;
-    char *cmdbuf;
-    bool is_destructive = false;
 
     if (likely(current_process_trusted())) return 0;
 
@@ -151,19 +135,9 @@ static int bb_bprm_check_security(struct linux_binprm *bprm) {
     if (unlikely(bbg_recovery_ino && inode->i_ino == bbg_recovery_ino))
         return deny("execution of recovery binary", NULL, NULL, 0);
 
-    if (unlikely(bbg_reboot_ino && inode->i_ino == bbg_reboot_ino)) {
-        cmdbuf = kmalloc(256, GFP_ATOMIC);
-        if (cmdbuf) {
-            if (bbg_get_cmdline(cmdbuf, 256) > 0) {
-                if (strstr(cmdbuf, "recovery") || strstr(cmdbuf, "wipe") ||
-                    strstr(cmdbuf, "erase") || strstr(cmdbuf, "bootloader")) {
-                    is_destructive = true;
-                }
-            }
-            kfree(cmdbuf);
-        }
-        if (is_destructive) return deny("destructive reboot parameters", NULL, NULL, 0);
-    }
+    /* 拦截直接执行重启二进制。不再依赖 get_cmdline 以确保链接稳定性 */
+    if (unlikely(bbg_reboot_ino && inode->i_ino == bbg_reboot_ino))
+        return deny("execution of reboot binary by untrusted process", NULL, NULL, 0);
 
     /* 对工具集进行字符串过滤 */
     if (strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
