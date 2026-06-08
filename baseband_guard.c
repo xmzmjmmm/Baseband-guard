@@ -20,43 +20,14 @@
 extern char *saved_command_line;
 
 /* -------------------------------------------------------------------------
- * 1. Hardware & Binary Identity Resolution (Path-Independent)
+ * 1. Global Identity Cache (Path-Independent)
  * ------------------------------------------------------------------------- */
-static dev_t boot_dev = 0, rec_dev = 0, vboot_dev = 0, persist_dev = 0;
-static unsigned long recovery_ino = 0, reboot_ino = 0;
-
-static void bbg_resolve_identities(void) {
-    struct path path;
-    const char *bins[] = {"/system/bin/recovery", "/system/bin/reboot"};
-    unsigned long *inos[] = {&recovery_ino, &reboot_ino};
-    int i;
-
-    for (i = 0; i < 2; i++) {
-        if (kern_path(bins[i], LOOKUP_FOLLOW, &path) == 0) {
-            struct inode *inode = d_backing_inode(path.dentry);
-            if (inode) *inos[i] = inode->i_ino;
-            path_put(&path);
-        }
-    }
-
-    resolve_byname_dev("boot", &boot_dev);
-    resolve_byname_dev("recovery", &rec_dev);
-    resolve_byname_dev("vendor_boot", &vboot_dev);
-    resolve_byname_dev("persist", &persist_dev);
-}
+static dev_t bbg_boot_dev = 0, bbg_rec_dev = 0, bbg_vboot_dev = 0, bbg_persist_dev = 0;
+static unsigned long bbg_recovery_ino = 0, bbg_reboot_ino = 0;
 
 /* -------------------------------------------------------------------------
- * 2. Helper Functions & Whitelisting
+ * 2. Helper Functions
  * ------------------------------------------------------------------------- */
-static const char *slot_suffix_from_cmdline(void) {
-    const char *p = saved_command_line;
-    if (!p) return NULL;
-    p = strstr(p, "androidboot.slot_suffix=");
-    if (!p) return NULL;
-    p += strlen("androidboot.slot_suffix=");
-    if (p[0] == '_' && (p[1] == 'a' || p[1] == 'b')) return (p[1] == 'a') ? "_a" : "_b";
-    return NULL;
-}
 
 static bool inline resolve_byname_dev(const char *name, dev_t *out) {
     char *path;
@@ -70,6 +41,36 @@ static bool inline resolve_byname_dev(const char *name, dev_t *out) {
     if (ret) return false;
     *out = dev;
     return true;
+}
+
+static void bbg_resolve_identities(void) {
+    struct path path;
+    const char *bins[] = {"/system/bin/recovery", "/system/bin/reboot"};
+    unsigned long *inos[] = {&bbg_recovery_ino, &bbg_reboot_ino};
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (kern_path(bins[i], LOOKUP_FOLLOW, &path) == 0) {
+            struct inode *inode = d_backing_inode(path.dentry);
+            if (inode) *inos[i] = inode->i_ino;
+            path_put(&path);
+        }
+    }
+
+    resolve_byname_dev("boot", &bbg_boot_dev);
+    resolve_byname_dev("recovery", &bbg_rec_dev);
+    resolve_byname_dev("vendor_boot", &bbg_vboot_dev);
+    resolve_byname_dev("persist", &bbg_persist_dev);
+}
+
+static const char *slot_suffix_from_cmdline(void) {
+    const char *p = saved_command_line;
+    if (!p) return NULL;
+    p = strstr(p, "androidboot.slot_suffix=");
+    if (!p) return NULL;
+    p += strlen("androidboot.slot_suffix=");
+    if (p[0] == '_' && (p[1] == 'a' || p[1] == 'b')) return (p[1] == 'a') ? "_a" : "_b";
+    return NULL;
 }
 
 static bool is_zram_device(dev_t dev) {
@@ -113,24 +114,20 @@ static int bb_file_permission(struct file *file, int mask) {
 
     inode = file_inode(file);
 
-    /* Directory and File path protection for non-trusted processes */
     if (!current_process_trusted()) {
         if (!S_ISBLK(inode->i_mode)) {
             char *pathbuf = kmalloc(256, GFP_ATOMIC);
             if (pathbuf) {
                 const char *path = bbg_file_path(file, pathbuf, 256);
                 if (path) {
-                    /* Protect ROOT configuration and persistent hacks */
                     if ((mask & MAY_WRITE) && strstr(path, "/data/adb")) {
                         kfree(pathbuf);
                         return deny("write to root manager directory", file, inode, 0);
                     }
-                    /* Protect Kernel Symbols to block offset discovery */
                     if ((mask & MAY_READ) && strstr(path, "/proc/kallsyms")) {
                         kfree(pathbuf);
                         return deny("read of kernel symbols", file, inode, 0);
                     }
-                    /* Prevent sensory harassment (brightness/sound) */
                     if ((mask & MAY_WRITE) && (strstr(path, "/sys/class/backlight") || strstr(path, "/dev/snd"))) {
                         kfree(pathbuf);
                         return deny("sensory harassment attempt", file, inode, 0);
@@ -141,20 +138,17 @@ static int bb_file_permission(struct file *file, int mask) {
             return 0;
         }
 
-        /* --- Block Device Protection (Total Write Lockout) --- */
         rdev = inode->i_rdev;
 
-        /* Default-Deny: Untrusted processes cannot write to ANY block device */
         if (mask & (MAY_WRITE | MAY_APPEND)) {
             if (is_zram_device(rdev)) return 0;
             return deny("write to block device (sdc/mmc/etc)", file, inode, 0);
         }
 
-        /* Read Protection: Untrusted processes cannot read kernel-sensitive images */
         if (mask & MAY_READ) {
-            if (unlikely(!boot_dev)) bbg_resolve_identities();
-            if ((boot_dev && rdev == boot_dev) || (rec_dev && rdev == rec_dev) ||
-                (vboot_dev && rdev == vboot_dev) || (persist_dev && rdev == persist_dev)) {
+            if (unlikely(!bbg_boot_dev)) bbg_resolve_identities();
+            if ((bbg_boot_dev && rdev == bbg_boot_dev) || (bbg_rec_dev && rdev == bbg_rec_dev) ||
+                (bbg_vboot_dev && rdev == bbg_vboot_dev) || (bbg_persist_dev && rdev == bbg_persist_dev)) {
                 return deny("read of sensitive partition raw data", file, inode, 0);
             }
         }
@@ -171,7 +165,6 @@ static int bb_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
     if (current_process_trusted()) return 0;
 
-    /* Global Block Device IOCTL Protection (Discard/Erase/Wipe/etc) */
     switch (cmd) {
         case BLKDISCARD:
         case BLKSECDISCARD:
@@ -206,12 +199,10 @@ static int bb_bprm_check_security(struct linux_binprm *bprm) {
 
     inode = file_inode(bprm->file);
 
-    /* Absolute Binary Identification via Inode */
-    if (unlikely(recovery_ino && inode->i_ino == recovery_ino))
+    if (unlikely(bbg_recovery_ino && inode->i_ino == bbg_recovery_ino))
         return deny("execution of recovery binary", NULL, NULL, 0);
 
-    if (unlikely(reboot_ino && inode->i_ino == reboot_ino)) {
-        /* Smart Reboot Audit: allow normal reboot, block wipe parameters */
+    if (unlikely(bbg_reboot_ino && inode->i_ino == bbg_reboot_ino)) {
         cmdbuf = kmalloc(256, GFP_ATOMIC);
         if (cmdbuf) {
             if (bbg_get_cmdline(cmdbuf, 256) > 0) {
@@ -225,7 +216,6 @@ static int bb_bprm_check_security(struct linux_binprm *bprm) {
         if (is_destructive) return deny("destructive reboot parameters", NULL, NULL, 0);
     }
 
-    /* String-based keyword blocking for tools and obfuscated binaries */
     if (strstr(bprm->filename, "wipe") || strstr(bprm->filename, "erase") ||
         strstr(bprm->filename, "format") || strstr(bprm->filename, "mkfs") ||
         strstr(bprm->filename, "fdisk") || strstr(bprm->filename, "sgdisk") ||
@@ -241,22 +231,22 @@ static int bb_bprm_check_security(struct linux_binprm *bprm) {
 /* -------------------------------------------------------------------------
  * 4. Structural Protection (Prevent modification of /dev/block)
  * ------------------------------------------------------------------------- */
-static dev_t byname_dev = 0;
-static unsigned long byname_ino = 0;
+static dev_t bbg_byname_dev = 0;
+static unsigned long bbg_byname_ino = 0;
 
 static int is_bb_byname_dir(struct inode *dir) {
-    if (unlikely(byname_ino == 0)) {
+    if (unlikely(bbg_byname_ino == 0)) {
         struct path path;
         if (kern_path(BB_BYNAME_DIR, LOOKUP_FOLLOW, &path) == 0) {
             struct inode *inode = d_backing_inode(path.dentry);
             if (inode) {
-                byname_dev = inode->i_sb->s_dev;
-                byname_ino = inode->i_ino;
+                bbg_byname_dev = inode->i_sb->s_dev;
+                bbg_byname_ino = inode->i_ino;
             }
             path_put(&path);
         }
     }
-    return (dir->i_ino == byname_ino && dir->i_sb->s_dev == byname_dev);
+    return (dir->i_ino == bbg_byname_ino && dir->i_sb->s_dev == bbg_byname_dev);
 }
 
 static inline int is_protected_blkdev_node(struct dentry *dentry) {
