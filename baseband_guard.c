@@ -63,16 +63,6 @@ static void bbg_resolve_identities(void) {
     resolve_byname_dev("persist", &bbg_persist_dev);
 }
 
-static const char *slot_suffix_from_cmdline(void) {
-    const char *p = saved_command_line;
-    if (!p) return NULL;
-    p = strstr(p, "androidboot.slot_suffix=");
-    if (!p) return NULL;
-    p += strlen("androidboot.slot_suffix=");
-    if (p[0] == '_' && (p[1] == 'a' || p[1] == 'b')) return (p[1] == 'a') ? "_a" : "_b";
-    return NULL;
-}
-
 static bool is_zram_device(dev_t dev) {
     return bbg_is_named_device(dev, "zram");
 }
