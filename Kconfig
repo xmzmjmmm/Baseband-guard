@@ -6,7 +6,7 @@ config BBG
        depends on SECURITY
        help
           An Android baseband anti-formatting protector 
-          module by Github@showdo, preventing malicious
+          module, preventing malicious
           scripts or programs writing into important
           function partitions.
           If unsure, leave this y.

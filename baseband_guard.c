@@ -321,8 +321,7 @@ static struct security_hook_list bb_hooks[] = {
 static int __init bbg_init(void) {
     bbg_resolve_identities();
     security_add_hooks_compat(bb_hooks, ARRAY_SIZE(bb_hooks));
-    pr_info("baseband_guard: Enhanced Edition by 致命编码者524 (v1.1-Ultra)\n");
-    pr_info("baseband_guard: Global block protection enabled (Zero-Trust Mode)\n");
+    pr_info("baseband_guard: kernel protection module initialized\n");
     return 0;
 }
 
@@ -333,6 +332,6 @@ extern struct lsm_blob_sizes bbg_blob_sizes;
 DEFINE_LSM(baseband_guard) = { .name = "baseband_guard", .init = bbg_init, .blobs = &bbg_blob_sizes };
 #endif
 
-MODULE_DESCRIPTION("Baseband-guard: Ultimate Partition & Kernel Protection");
-MODULE_AUTHOR("致命编码者524 & Github@showdo");
+MODULE_DESCRIPTION("Baseband-guard: Block Device Protection");
+MODULE_AUTHOR("Baseband-guard Team");
 MODULE_LICENSE("GPL v2");
