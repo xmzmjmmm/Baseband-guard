@@ -2,19 +2,25 @@
 #include <linux/security.h>
 #include <linux/errno.h>
 #include <linux/cred.h>
+#include <linux/slab.h>
 #include "tracing.h"
+
+/* SELinux internal headers are provided by Makefile include paths */
+#include "objsec.h"
 
 #ifdef BBG_USE_DEFINE_LSM
 struct lsm_blob_sizes bbg_blob_sizes __ro_after_init = {
     .lbs_cred = sizeof(struct bbg_cred_security_struct),
 };
-#else
+#endif
 
-static inline struct task_security_struct *selinux_cred(const struct cred *cred) {
+/* Standard SELinux cred accessor usually provided by objsec.h */
+#ifndef selinux_cred
+static inline struct task_security_struct *bbg_selinux_cred(const struct cred *cred) {
     if (!cred) return NULL;
     return cred->security;
 }
-
+#define selinux_cred bbg_selinux_cred
 #endif
 
 int bb_cred_prepare(struct cred *new, const struct cred *old,

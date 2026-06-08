@@ -5,6 +5,7 @@
 #include <linux/security.h>
 #include <linux/lsm_hooks.h>
 #include <linux/version.h>
+#include <linux/kernel.h>
 
 /* lookup_bdev compatibility wrapper */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
@@ -88,7 +89,7 @@ static __maybe_unused inline void __init security_add_hooks_compat(struct securi
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
     security_add_hooks(hooks, count, &bbg_lsmid);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-    security_add_hooks(hooks, count, "baseband_guard");
+    security_add_hooks(hooks, count, (char *)"baseband_guard");
 #else
     security_add_hooks(hooks, count);
 #endif

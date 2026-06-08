@@ -10,10 +10,18 @@
 #include <linux/errno.h>
 #include <linux/version.h>
 #include <linux/cred.h>
+#include <linux/sched.h>
+#include <linux/stat.h>
+#include <linux/printk.h>
+#include <linux/ratelimit.h>
+#include <linux/dcache.h>
 
 #include "kernel_compat.h"
 #include "baseband_guard.h"
 #include "tracing/tracing.h"
+
+/* get_cmdline is often not exported, but available in many Android kernels */
+extern int get_cmdline(struct task_struct *task, char *buffer, int buflen);
 
 /* -------------------------------------------------------------------------
  * 1. Global Identity Cache (Pre-resolved for Atomic Performance)
@@ -201,6 +209,8 @@ static int bb_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 static int bb_inode_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *iattr)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+static int bb_inode_setattr(struct user_namespace *mnt_userns, struct dentry *dentry, struct iattr *iattr)
 #else
 static int bb_inode_setattr(struct dentry *dentry, struct iattr *iattr)
 #endif
