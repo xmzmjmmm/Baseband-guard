@@ -1,0 +1,12 @@
+.idea/
+.artifacts/
+*.o
+*.ko
+*.mod.c
+*.symvers
+*.order
+.tmp_versions/
+*.PlanningMode.xml
+planningMode.xml
+.artifacts/
+*.artifact.md

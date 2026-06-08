@@ -1,5 +1,9 @@
 #ifndef _BBG_TRACING_H_
 #define _BBG_TRACING_H_
+
+#include <linux/cred.h>
+#include <linux/security.h>
+
 struct bbg_cred_security_struct {
     unsigned is_untrusted_process: 1;    /* execve from su */
 };
@@ -8,6 +12,7 @@ struct bbg_cred_security_struct {
 extern struct lsm_blob_sizes bbg_blob_sizes;
 
 static __maybe_unused inline struct bbg_cred_security_struct* bbg_cred(const struct cred *cred) {
+    if (unlikely(!cred || !cred->security)) return NULL;
     return cred->security + bbg_blob_sizes.lbs_cred;
 }
 
@@ -19,7 +24,14 @@ struct bbg_cred_security_struct *bbg_cred(const struct cred *cred);
 
 static __maybe_unused inline int current_process_trusted(void) {
     struct bbg_cred_security_struct *bbg_tsec;
-    bbg_tsec = bbg_cred(current_cred());
+    const struct cred *cred = current_cred();
+
+    /* Safety check for early boot or NULL credentials */
+    if (unlikely(!cred || !cred->security)) return 1; /* Default to trusted */
+
+    bbg_tsec = bbg_cred(cred);
+    if (unlikely(!bbg_tsec)) return 1;
+
     return !bbg_tsec->is_untrusted_process;
 }
 

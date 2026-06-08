@@ -1,33 +1,31 @@
+#ifndef _BBG_KERNEL_COMPAT_H_
+#define _BBG_KERNEL_COMPAT_H_
+
 #include <linux/blkdev.h>
 #include <linux/security.h>
 #include <linux/lsm_hooks.h>
 #include <linux/version.h>
-#include "objsec.h"
 
+/* lookup_bdev compatibility wrapper */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
-static __maybe_unused inline int lookup_bdev_compat(char *path, dev_t *out) {
+static __maybe_unused inline int lookup_bdev_compat(const char *path, dev_t *out) {
     struct block_device *bdev;
 
-    if (!path || !out) {
-        return 1;
-    }
+    if (!path || !out) return 1;
 
     bdev = lookup_bdev(path);
-    if (IS_ERR(bdev))
-        return 1;
+    if (IS_ERR(bdev)) return 1;
+
     *out = bdev->bd_dev;
     bdput(bdev);
     return 0;
 }
 #else
-
-static __maybe_unused inline int lookup_bdev_compat(char *path, dev_t *out) {
+static __maybe_unused inline int lookup_bdev_compat(const char *path, dev_t *out) {
     dev_t dev;
     int ret;
 
-    if (!path || !out) {
-        return 1;
-    }
+    if (!path || !out) return 1;
 
     ret = lookup_bdev(path, &dev);
     if (ret) return ret;
@@ -35,60 +33,48 @@ static __maybe_unused inline int lookup_bdev_compat(char *path, dev_t *out) {
     *out = dev;
     return 0;
 }
-
 #endif
 
-// https://github.com/torvalds/linux/commit/22ae8ce8b89241c94ac00c237752c0ffa37ba5ae
+/* Check if a device name matches a prefix (e.g., "zram") */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
-
-static __maybe_unused bool bbg_is_named_device(dev_t dev, const char *name_prefix)
-{
+static __maybe_unused bool bbg_is_named_device(dev_t dev, const char *name_prefix) {
     struct block_device *bdev;
     bool match = false;
 
+    if (!name_prefix) return false;
+
     bdev = blkdev_get_by_dev(dev, FMODE_READ, THIS_MODULE);
-    if (IS_ERR(bdev))
-        return false;
+    if (IS_ERR(bdev)) return false;
 
-    if (bdev->bd_disk && name_prefix) {
-        const char *disk_name = bdev->bd_disk->disk_name;
-        size_t prefix_len = strlen(name_prefix);
-
-        if (strncmp(disk_name, name_prefix, prefix_len) == 0) {
-            match = true;
-        }
+    if (bdev->bd_disk) {
+        match = (strncmp(bdev->bd_disk->disk_name, name_prefix, strlen(name_prefix)) == 0);
     }
 
     blkdev_put(bdev, FMODE_READ);
     return match;
 }
 #else
-
 static __maybe_unused bool bbg_is_named_device(dev_t dev, const char *name_prefix) {
     struct block_device *bdev;
     bool match = false;
 
-// https://github.com/torvalds/linux/commit/5f33b5226c9d92359e58e91ad0bf0c1791da36a1
+    if (!name_prefix) return false;
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 15, 0)
     bdev = blkdev_get_no_open(dev);
 #else
     bdev = blkdev_get_no_open(dev, true);
 #endif
 
-    if (IS_ERR(bdev))
-        return false;
+    if (IS_ERR(bdev)) return false;
 
-    if (bdev->bd_disk && name_prefix) {
-        const char *disk_name = bdev->bd_disk->disk_name;
-        size_t prefix_len = strlen(name_prefix);
-        match = (strncmp(disk_name, name_prefix, prefix_len) == 0);
+    if (bdev->bd_disk) {
+        match = (strncmp(bdev->bd_disk->disk_name, name_prefix, strlen(name_prefix)) == 0);
     }
 
     blkdev_put_no_open(bdev);
-
     return match;
 }
-
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
@@ -98,9 +84,7 @@ const struct lsm_id bbg_lsmid = {
 };
 #endif
 
-static __maybe_unused inline void __init
-
-security_add_hooks_compat(struct security_hook_list *hooks, int count) {
+static __maybe_unused inline void __init security_add_hooks_compat(struct security_hook_list *hooks, int count) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
     security_add_hooks(hooks, count, &bbg_lsmid);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
@@ -108,5 +92,6 @@ security_add_hooks_compat(struct security_hook_list *hooks, int count) {
 #else
     security_add_hooks(hooks, count);
 #endif
-
 }
+
+#endif /* _BBG_KERNEL_COMPAT_H_ */
